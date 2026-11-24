@@ -1,0 +1,8 @@
+name = "google-health-mcp"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[kv_namespaces]]
+binding = "HEALTH_TOKENS"
+id = "a36dbd81d0004cd0b9869c2ffe85ebb3"
