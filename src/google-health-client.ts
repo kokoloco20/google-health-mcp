@@ -59,10 +59,24 @@ function civilDateParts(date: string): { year: number; month: number; day: numbe
   return { year, month, day };
 }
 
-/** ISO 8601 civil date range filter, e.g. for list calls. */
-function civilTimeFilter(startDate: string, endDate: string): string {
-  // Google Health API filter syntax, per the data-types reference docs.
-  return `interval.civil_start_time >= "${startDate}T00:00:00" AND interval.civil_end_time <= "${endDate}T23:59:59"`;
+/** Data types whose points are a single moment (sample_time) instead of an interval. */
+const SAMPLE_TYPES = new Set([
+  "weight", "height", "body-fat", "blood-glucose", "oxygen-saturation", "core-body-temperature",
+]);
+
+function nextDay(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Civil date range filter. The field must be prefixed with the snake_case data type. */
+function civilTimeFilter(dataType: string, startDate: string, endDate: string): string {
+  const t = dataType.replace(/-/g, "_");
+  const field = SAMPLE_TYPES.has(dataType)
+    ? `${t}.sample_time.civil_time`
+    : `${t}.interval.civil_start_time`;
+  return `${field} >= "${startDate}T00:00:00" AND ${field} < "${nextDay(endDate)}T00:00:00"`;
 }
 
 export async function getDailyRollUp(
@@ -93,9 +107,24 @@ export async function listDataPoints(
   startDate: string,
   endDate: string
 ): Promise<unknown> {
-  return callGoogleHealth(env, userId, `/dataTypes/${dataType}/dataPoints`, {
-    filter: civilTimeFilter(startDate, endDate),
-  });
+  const allPoints: unknown[] = [];
+  let pageToken: string | undefined;
+  do {
+    const params: Record<string, string> = {
+      filter: civilTimeFilter(dataType, startDate, endDate),
+      pageSize: "1000",
+    };
+    if (pageToken) params.pageToken = pageToken;
+    const page = (await callGoogleHealth(
+      env,
+      userId,
+      `/dataTypes/${dataType}/dataPoints`,
+      params
+    )) as { dataPoints?: unknown[]; nextPageToken?: string };
+    if (page.dataPoints) allPoints.push(...page.dataPoints);
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  return { dataPoints: allPoints };
 }
 
 /** List data points without a filter — needed for types like `sleep` that don't support the `interval` filter field. */
@@ -140,6 +169,6 @@ export async function reconcileDataPoints(
   endDate: string
 ): Promise<unknown> {
   return callGoogleHealth(env, userId, `/dataTypes/${dataType}/dataPoints:reconcile`, {
-    filter: civilTimeFilter(startDate, endDate),
+    filter: civilTimeFilter(dataType, startDate, endDate),
   });
 }
