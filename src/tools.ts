@@ -506,11 +506,47 @@ export function registerTools(server: McpServer, env: Env, userId: string): void
     { startDate: dateParam(), endDate: dateParam() },
     async ({ startDate, endDate }) => {
       try {
-        const [hydration, nutrition] = await Promise.all([
-          getDailyRollUp(env, userId, DataType.hydrationLog, startDate, endDate),
-          getDailyRollUp(env, userId, DataType.nutritionLog, startDate, endDate),
-        ]);
-        return jsonResult({ hydration, nutrition });
+        const [hydrationRaw, nutritionRaw] = (await Promise.all([
+          listDataPoints(env, userId, DataType.hydrationLog, startDate, endDate),
+          listDataPoints(env, userId, DataType.nutritionLog, startDate, endDate),
+        ])) as Array<{ dataPoints?: any[] }>;
+
+        const dayOf = (iv: any): string => {
+          const d = iv?.civilStartTime?.date;
+          return d
+            ? `${d.year}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`
+            : "unknown";
+        };
+        const nutrient = (n: any, name: string): number =>
+          Number((n.nutrients ?? []).find((x: any) => x.nutrient === name)?.quantity?.grams ?? 0);
+
+        const days: Record<string, any> = {};
+        const day = (k: string) =>
+          (days[k] ??= { kcal: 0, proteinG: 0, carbsG: 0, fatG: 0, waterMl: 0, meals: [] as any[] });
+
+        for (const p of nutritionRaw.dataPoints ?? []) {
+          const n = p.nutritionLog;
+          if (!n) continue;
+          const d = day(dayOf(n.interval));
+          const kcal = Number(n.energy?.kcal ?? 0);
+          const protein = nutrient(n, "PROTEIN");
+          const carbs = Number(n.totalCarbohydrate?.grams ?? 0);
+          const fat = Number(n.totalFat?.grams ?? 0);
+          d.kcal += kcal;
+          d.proteinG += protein;
+          d.carbsG += carbs;
+          d.fatG += fat;
+          d.meals.push({ mealType: n.mealType, food: n.foodDisplayName, kcal, proteinG: protein, carbsG: carbs, fatG: fat });
+        }
+        for (const p of hydrationRaw.dataPoints ?? []) {
+          const h = p.hydrationLog;
+          if (!h) continue;
+          day(dayOf(h.interval)).waterMl += Number(h.amountConsumed?.milliliters ?? 0);
+        }
+        for (const d of Object.values(days)) {
+          for (const k of ["kcal", "proteinG", "carbsG", "fatG", "waterMl"]) d[k] = Math.round(d[k]);
+        }
+        return jsonResult({ days });
       } catch (err) {
         return errorResult(err);
       }
